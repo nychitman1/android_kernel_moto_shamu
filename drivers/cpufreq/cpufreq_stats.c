@@ -278,6 +278,106 @@ static void cpufreq_stats_update_policy_cpu(struct cpufreq_policy *policy)
 	stat->cpu = policy->cpu;
 }
 
+static int compare_for_sort(const void *lhs_ptr, const void *rhs_ptr)
+{
+	unsigned int lhs = *(const unsigned int *)(lhs_ptr);
+	unsigned int rhs = *(const unsigned int *)(rhs_ptr);
+	if (lhs < rhs)
+		return -1;
+	if (lhs > rhs)
+		return 1;
+	return 0;
+}
+
+static bool check_all_freq_table(unsigned int freq)
+{
+	int i;
+	for (i = 0; i < all_freq_table->table_size; i++) {
+		if (freq == all_freq_table->freq_table[i])
+			return true;
+	}
+	return false;
+}
+
+static void create_all_freq_table(void)
+{
+	all_freq_table = kzalloc(sizeof(struct all_freq_table),
+			GFP_KERNEL);
+	if (!all_freq_table)
+		pr_warn("could not allocate memory for all_freq_table\n");
+	return;
+}
+
+static void add_all_freq_table(unsigned int freq)
+{
+	unsigned int size;
+	size = sizeof(unsigned int) * (all_freq_table->table_size + 1);
+	all_freq_table->freq_table = krealloc(all_freq_table->freq_table,
+			size, GFP_ATOMIC);
+	if (IS_ERR(all_freq_table->freq_table)) {
+		pr_warn("Could not reallocate memory for freq_table\n");
+		all_freq_table->freq_table = NULL;
+		return;
+	}
+	all_freq_table->freq_table[all_freq_table->table_size++] = freq;
+}
+
+static void cpufreq_allstats_create(unsigned int cpu)
+{
+	int i , j = 0;
+	unsigned int alloc_size, count = 0;
+	struct cpufreq_frequency_table *table = cpufreq_frequency_get_table(cpu);
+	struct all_cpufreq_stats *all_stat;
+	bool sort_needed = false;
+
+	if (!table)
+		return;
+
+	for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
+		unsigned int freq = table[i].frequency;
+		if (freq == CPUFREQ_ENTRY_INVALID)
+			continue;
+		count++;
+	}
+
+	all_stat = kzalloc(sizeof(struct all_cpufreq_stats),
+			GFP_KERNEL);
+	if (!all_stat) {
+		pr_warn("Cannot allocate memory for cpufreq stats\n");
+		return;
+	}
+
+	/*Allocate memory for freq table per cpu as well as clockticks per freq*/
+	alloc_size = count * sizeof(int) + count * sizeof(cputime64_t);
+	all_stat->time_in_state = kzalloc(alloc_size, GFP_KERNEL);
+	if (!all_stat->time_in_state) {
+		pr_warn("Cannot allocate memory for cpufreq time_in_state\n");
+		kfree(all_stat);
+		all_stat = NULL;
+		return;
+	}
+	all_stat->freq_table = (unsigned int *)
+		(all_stat->time_in_state + count);
+
+	spin_lock(&cpufreq_stats_lock);
+	for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
+		unsigned int freq = table[i].frequency;
+		if (freq == CPUFREQ_ENTRY_INVALID)
+			continue;
+		all_stat->freq_table[j++] = freq;
+		if (all_freq_table && !check_all_freq_table(freq)) {
+			add_all_freq_table(freq);
+			sort_needed = true;
+		}
+	}
+	if (sort_needed)
+		sort(all_freq_table->freq_table, all_freq_table->table_size,
+				sizeof(unsigned int), &compare_for_sort, NULL);
+	all_stat->state_num = j;
+	per_cpu(all_cpufreq_stats, cpu) = all_stat;
+	spin_unlock(&cpufreq_stats_lock);
+}
+
 static int cpufreq_stat_notifier_policy(struct notifier_block *nb,
 		unsigned long val, void *data)
 {
