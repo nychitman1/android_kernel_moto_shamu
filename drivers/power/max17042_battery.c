@@ -135,7 +135,6 @@ struct max17042_chip {
 	struct max17042_wakeup_source max17042_wake_source;
 	int charge_full_des;
 	int taper_reached;
-	bool factory_mode;
 };
 
 static void max17042_stay_awake(struct max17042_wakeup_source *source)
@@ -787,9 +786,7 @@ static inline void max17042_override_por_values(struct max17042_chip *chip)
 	max17042_override_por(client, MAX17042_CGAIN, config->cgain);
 	max17042_override_por(client, MAX17042_COFF, config->coff);
 
-	if (!chip->factory_mode)
-		max17042_override_por(client, MAX17042_VALRT_Th,
-				      POR_VALRT_THRESHOLD);
+	max17042_override_por(client, MAX17042_VALRT_Th, POR_VALRT_THRESHOLD);
 	max17042_override_por(client, MAX17042_TALRT_Th, config->talrt_thresh);
 	max17042_override_por(client, MAX17042_SALRT_Th,
 			config->soc_alrt_thresh);
@@ -1088,8 +1085,7 @@ static irqreturn_t max17042_thread_handler(int id, void *dev)
 		chip->batt_undervoltage = true;
 	} else if (val & STATUS_INTR_VMAX_BIT) {
 		dev_info(&chip->client->dev, "Battery overvoltage INTR\n");
-		if (!chip->factory_mode)
-			max17042_write_reg(chip->client, MAX17042_VALRT_Th,
+		max17042_write_reg(chip->client, MAX17042_VALRT_Th,
 				   chip->pdata->config_data->valrt_thresh);
 	}
 
@@ -1865,20 +1861,6 @@ iterm_fail:
 	return;
 }
 
-static bool max17042_mmi_factory(void)
-{
-	struct device_node *np = of_find_node_by_path("/chosen");
-	bool factory = false;
-
-	if (np)
-		factory = of_property_read_bool(np, "mmi,factory-cable");
-
-	of_node_put(np);
-
-	return factory;
-}
-
-
 static int max17042_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
@@ -1904,7 +1886,6 @@ static int max17042_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 
-	chip->factory_mode = false;
 	chip->charge_full_des = (chip->pdata->config_data->design_cap / 2) * 1000;
 
 	i2c_set_clientdata(client, chip);
@@ -1952,10 +1933,6 @@ static int max17042_probe(struct i2c_client *client,
 		dev_err(&client->dev, "failed: power supply register\n");
 		return ret;
 	}
-
-	chip->factory_mode = max17042_mmi_factory();
-	if (chip->factory_mode)
-		dev_info(&client->dev, "max17042: Factory Mode\n");
 
 	chip->temp_state = POWER_SUPPLY_HEALTH_UNKNOWN;
 	chip->taper_reached = 0;
